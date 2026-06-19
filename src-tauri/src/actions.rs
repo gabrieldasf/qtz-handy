@@ -1,9 +1,11 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error};
+use crate::audio_toolkit::{
+    apply_correction_rules, is_microphone_access_denied, is_no_input_device_error,
+};
 use crate::managers::audio::AudioRecordingManager;
-use crate::managers::history::HistoryManager;
+use crate::managers::history::{CorrectionRule, HistoryManager};
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
 use crate::shortcut;
@@ -63,7 +65,40 @@ fn build_system_prompt(prompt_template: &str) -> String {
     prompt_template.replace("${output}", "").trim().to_string()
 }
 
-async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
+fn correction_prompt_context(correction_rules: &[CorrectionRule]) -> Option<String> {
+    if correction_rules.is_empty() {
+        return None;
+    }
+
+    let rules = correction_rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .map(|rule| format!("- \"{}\" -> \"{}\"", rule.heard_text, rule.correct_text))
+        .collect::<Vec<_>>();
+
+    if rules.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "Apply these user correction rules exactly when relevant:\n{}",
+        rules.join("\n")
+    ))
+}
+
+fn append_correction_context(prompt: String, correction_rules: &[CorrectionRule]) -> String {
+    match correction_prompt_context(correction_rules) {
+        Some(context) if prompt.is_empty() => context,
+        Some(context) => format!("{}\n\n{}", prompt, context),
+        None => prompt,
+    }
+}
+
+async fn post_process_transcription(
+    settings: &AppSettings,
+    transcription: &str,
+    correction_rules: &[CorrectionRule],
+) -> Option<String> {
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
         None => {
@@ -144,7 +179,8 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     if provider.supports_structured_output {
         debug!("Using structured outputs for provider '{}'", provider.id);
 
-        let system_prompt = build_system_prompt(&prompt);
+        let system_prompt =
+            append_correction_context(build_system_prompt(&prompt), correction_rules);
         let user_content = transcription.to_string();
 
         // Handle Apple Intelligence separately since it uses native Swift APIs
@@ -259,7 +295,8 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     }
 
     // Legacy mode: Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
+    let processed_prompt =
+        append_correction_context(prompt.replace("${output}", transcription), correction_rules);
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
     match crate::llm_client::send_chat_completion(
@@ -360,8 +397,21 @@ pub(crate) async fn process_transcription_output(
         final_text = converted_text;
     }
 
+    let correction_rules = match app.try_state::<Arc<HistoryManager>>() {
+        Some(history_manager) => match history_manager.get_enabled_correction_rules() {
+            Ok(rules) => rules,
+            Err(err) => {
+                error!("Failed to load correction rules: {}", err);
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
+
     if post_process {
-        if let Some(processed_text) = post_process_transcription(&settings, &final_text).await {
+        if let Some(processed_text) =
+            post_process_transcription(&settings, &final_text, &correction_rules).await
+        {
             post_processed_text = Some(processed_text.clone());
             final_text = processed_text;
 
@@ -375,7 +425,16 @@ pub(crate) async fn process_transcription_output(
                 }
             }
         }
-    } else if final_text != transcription {
+    }
+
+    if !correction_rules.is_empty() {
+        let corrected_text = apply_correction_rules(&final_text, &correction_rules);
+        if corrected_text != final_text {
+            final_text = corrected_text;
+        }
+    }
+
+    if post_processed_text.as_deref() != Some(final_text.as_str()) && final_text != transcription {
         post_processed_text = Some(final_text.clone());
     }
 

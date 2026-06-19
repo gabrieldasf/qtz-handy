@@ -1,5 +1,6 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::history::HistoryManager;
 use crate::managers::model::{EngineType, ModelManager};
 use crate::settings::{
     get_settings, ModelUnloadTimeout, OrtAcceleratorSetting, WhisperAcceleratorSetting,
@@ -474,6 +475,22 @@ impl TranscriptionManager {
 
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
+        let mut prompt_words = settings.custom_words.clone();
+        if let Some(history_manager) = self.app_handle.try_state::<Arc<HistoryManager>>() {
+            match history_manager.get_correction_vocabulary() {
+                Ok(correction_words) => {
+                    for word in correction_words {
+                        if !prompt_words
+                            .iter()
+                            .any(|existing| existing.eq_ignore_ascii_case(&word))
+                        {
+                            prompt_words.push(word);
+                        }
+                    }
+                }
+                Err(err) => warn!("Failed to load correction vocabulary: {}", err),
+            }
+        }
 
         // Validate selected language against the model's supported languages.
         // If the language isn't supported, fall back to "auto" to prevent errors.
@@ -543,10 +560,10 @@ impl TranscriptionManager {
                             let params = WhisperInferenceParams {
                                 language: whisper_language,
                                 translate: settings.translate_to_english,
-                                initial_prompt: if settings.custom_words.is_empty() {
+                                initial_prompt: if prompt_words.is_empty() {
                                     None
                                 } else {
-                                    Some(settings.custom_words.join(", "))
+                                    Some(prompt_words.join(", "))
                                 },
                                 ..Default::default()
                             };

@@ -1,6 +1,6 @@
 use natural::phonetics::soundex;
 use once_cell::sync::Lazy;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use strsim::levenshtein;
 
 /// Builds an n-gram string by cleaning and concatenating words
@@ -153,6 +153,109 @@ pub fn apply_custom_words(text: &str, custom_words: &[String], threshold: f64) -
     }
 
     result.join(" ")
+}
+
+pub trait CorrectionRuleInput {
+    fn heard_text(&self) -> &str;
+    fn correct_text(&self) -> &str;
+    fn enabled(&self) -> bool;
+}
+
+impl CorrectionRuleInput for (&str, &str, bool) {
+    fn heard_text(&self) -> &str {
+        self.0
+    }
+
+    fn correct_text(&self) -> &str {
+        self.1
+    }
+
+    fn enabled(&self) -> bool {
+        self.2
+    }
+}
+
+fn is_correction_boundary(ch: Option<char>) -> bool {
+    ch.map_or(true, |c| !(c.is_alphanumeric() || c == '_'))
+}
+
+fn has_correction_boundaries(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    is_correction_boundary(before) && is_correction_boundary(after)
+}
+
+fn correction_phrase_regex(heard_text: &str) -> Option<Regex> {
+    let tokens: Vec<String> = heard_text.split_whitespace().map(regex::escape).collect();
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    RegexBuilder::new(&tokens.join(r"\s+"))
+        .case_insensitive(true)
+        .build()
+        .ok()
+}
+
+fn apply_single_correction_rule(text: &str, heard_text: &str, correct_text: &str) -> String {
+    let Some(pattern) = correction_phrase_regex(heard_text) else {
+        return text.to_string();
+    };
+
+    let mut output = String::with_capacity(text.len());
+    let mut last_end = 0;
+    let mut changed = false;
+
+    for mat in pattern.find_iter(text) {
+        if !has_correction_boundaries(text, mat.start(), mat.end()) {
+            continue;
+        }
+
+        output.push_str(&text[last_end..mat.start()]);
+        output.push_str(correct_text);
+        last_end = mat.end();
+        changed = true;
+    }
+
+    if !changed {
+        return text.to_string();
+    }
+
+    output.push_str(&text[last_end..]);
+    output
+}
+
+pub fn apply_correction_rules<R: CorrectionRuleInput>(text: &str, rules: &[R]) -> String {
+    if rules.is_empty() {
+        return text.to_string();
+    }
+
+    let mut ordered_rules: Vec<&R> = rules
+        .iter()
+        .filter(|rule| {
+            rule.enabled()
+                && !rule.heard_text().trim().is_empty()
+                && !rule.correct_text().trim().is_empty()
+        })
+        .collect();
+
+    ordered_rules.sort_by(|a, b| {
+        b.heard_text()
+            .chars()
+            .count()
+            .cmp(&a.heard_text().chars().count())
+    });
+
+    ordered_rules
+        .into_iter()
+        .fold(text.to_string(), |current, rule| {
+            apply_single_correction_rule(
+                &current,
+                rule.heard_text().trim(),
+                rule.correct_text().trim(),
+            )
+        })
 }
 
 /// Preserves the case pattern of the original word when applying a replacement
@@ -563,5 +666,40 @@ mod tests {
             "got double-counted result: {}",
             result
         );
+    }
+
+    #[test]
+    fn test_apply_correction_rules_exact_phrase() {
+        let rules = vec![("Live Zap", "Livess App", true)];
+        let result = apply_correction_rules("Open Live Zap now", &rules);
+        assert_eq!(result, "Open Livess App now");
+    }
+
+    #[test]
+    fn test_apply_correction_rules_phrase_with_punctuation() {
+        let rules = vec![("Live Zap", "Livess App", true)];
+        let result = apply_correction_rules("Open Live Zap, then wait.", &rules);
+        assert_eq!(result, "Open Livess App, then wait.");
+    }
+
+    #[test]
+    fn test_apply_correction_rules_disabled_ignored() {
+        let rules = vec![("Live Zap", "Livess App", false)];
+        let result = apply_correction_rules("Open Live Zap now", &rules);
+        assert_eq!(result, "Open Live Zap now");
+    }
+
+    #[test]
+    fn test_apply_correction_rules_does_not_match_inside_words() {
+        let rules = vec![("Zap", "App", true)];
+        let result = apply_correction_rules("Live Zap and Zapier", &rules);
+        assert_eq!(result, "Live App and Zapier");
+    }
+
+    #[test]
+    fn test_apply_correction_rules_prefers_longer_phrase() {
+        let rules = vec![("Live", "Alive", true), ("Live Zap", "Livess App", true)];
+        let result = apply_correction_rules("Live Zap works", &rules);
+        assert_eq!(result, "Livess App works");
     }
 }

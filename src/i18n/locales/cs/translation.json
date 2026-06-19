@@ -431,7 +431,20 @@
       "retranscribe": "Přepsat znovu",
       "retranscribeError": "Opětovný přepis se nezdařil. Zkuste to prosím znovu.",
       "transcribing": "Přepisuji...",
-      "transcriptionFailed": "Přepis selhal. Můžete zkusit přepis znovu pomocí ikony opakování."
+      "transcriptionFailed": "Přepis selhal. Můžete zkusit přepis znovu pomocí ikony opakování.",
+      "corrections": {
+        "add": "Add correction",
+        "heardLabel": "Wrong or heard text",
+        "heardPlaceholder": "Wrong or heard text",
+        "correctLabel": "Correct text",
+        "correctPlaceholder": "Correct text",
+        "cancel": "Cancel correction row",
+        "saved": "Correction saved",
+        "created": "Correction saved",
+        "partialRow": "Enter both the heard text and the correct text.",
+        "duplicate": "A correction for \"{{heardText}}\" already exists.",
+        "createError": "Failed to save correction. Please try again."
+      }
     },
     "debug": {
       "title": "Ladění",

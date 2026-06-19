@@ -1,3 +1,4 @@
+use crate::audio_toolkit::apply_correction_rules;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local, Utc};
 use log::{debug, error, info};
@@ -31,6 +32,20 @@ static MIGRATIONS: &[M] = &[
     M::up("ALTER TABLE transcription_history ADD COLUMN post_processed_text TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_prompt TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_requested BOOLEAN NOT NULL DEFAULT 0;"),
+    M::up(
+        "CREATE TABLE IF NOT EXISTS correction_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            heard_text TEXT NOT NULL,
+            heard_text_key TEXT NOT NULL UNIQUE,
+            correct_text TEXT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            source_history_entry_id INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_correction_rules_enabled
+            ON correction_rules(enabled, id);",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -63,6 +78,31 @@ pub struct HistoryEntry {
     pub post_processed_text: Option<String>,
     pub post_process_prompt: Option<String>,
     pub post_process_requested: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+pub struct CorrectionRule {
+    pub id: i64,
+    pub heard_text: String,
+    pub correct_text: String,
+    pub enabled: bool,
+    pub source_history_entry_id: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl crate::audio_toolkit::text::CorrectionRuleInput for CorrectionRule {
+    fn heard_text(&self) -> &str {
+        &self.heard_text
+    }
+
+    fn correct_text(&self) -> &str {
+        &self.correct_text
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 pub struct HistoryManager {
@@ -210,8 +250,247 @@ impl HistoryManager {
         })
     }
 
+    fn map_correction_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<CorrectionRule> {
+        Ok(CorrectionRule {
+            id: row.get("id")?,
+            heard_text: row.get("heard_text")?,
+            correct_text: row.get("correct_text")?,
+            enabled: row.get("enabled")?,
+            source_history_entry_id: row.get("source_history_entry_id")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+
+    fn normalize_correction_text(value: &str) -> String {
+        value.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn correction_key(value: &str) -> String {
+        Self::normalize_correction_text(value).to_lowercase()
+    }
+
+    fn validate_correction_rule_texts(heard_text: &str, correct_text: &str) -> Result<()> {
+        if heard_text.is_empty() || correct_text.is_empty() {
+            return Err(anyhow!(
+                "Correction rule requires both heard and correct text"
+            ));
+        }
+
+        if heard_text.eq_ignore_ascii_case(correct_text) {
+            return Err(anyhow!("Correction rule must change the heard text"));
+        }
+
+        Ok(())
+    }
+
+    fn select_correction_rule_by_id(conn: &Connection, id: i64) -> Result<CorrectionRule> {
+        conn.query_row(
+            "SELECT id, heard_text, correct_text, enabled, source_history_entry_id, created_at, updated_at
+             FROM correction_rules
+             WHERE id = ?1",
+            params![id],
+            Self::map_correction_rule,
+        )
+        .map_err(Into::into)
+    }
+
+    fn has_duplicate_correction_rule_key(
+        conn: &Connection,
+        heard_text_key: &str,
+        excluded_id: Option<i64>,
+    ) -> Result<bool> {
+        let duplicate_id: Option<i64> = match excluded_id {
+            Some(id) => conn
+                .query_row(
+                    "SELECT id FROM correction_rules WHERE heard_text_key = ?1 AND id != ?2",
+                    params![heard_text_key, id],
+                    |row| row.get("id"),
+                )
+                .optional()?,
+            None => conn
+                .query_row(
+                    "SELECT id FROM correction_rules WHERE heard_text_key = ?1",
+                    params![heard_text_key],
+                    |row| row.get("id"),
+                )
+                .optional()?,
+        };
+
+        Ok(duplicate_id.is_some())
+    }
+
     pub fn recordings_dir(&self) -> &std::path::Path {
         &self.recordings_dir
+    }
+
+    pub fn create_correction_rule(
+        &self,
+        heard_text: String,
+        correct_text: String,
+        source_history_entry_id: Option<i64>,
+    ) -> Result<CorrectionRule> {
+        let heard_text = Self::normalize_correction_text(&heard_text);
+        let correct_text = Self::normalize_correction_text(&correct_text);
+
+        Self::validate_correction_rule_texts(&heard_text, &correct_text)?;
+
+        let heard_text_key = Self::correction_key(&heard_text);
+        let now = Utc::now().timestamp();
+        let conn = self.get_connection()?;
+
+        if Self::has_duplicate_correction_rule_key(&conn, &heard_text_key, None)? {
+            return Err(anyhow!("Duplicate correction rule for '{}'", heard_text));
+        }
+
+        conn.execute(
+            "INSERT INTO correction_rules (
+                heard_text,
+                heard_text_key,
+                correct_text,
+                enabled,
+                source_history_entry_id,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                heard_text,
+                heard_text_key,
+                correct_text,
+                true,
+                source_history_entry_id,
+                now,
+                now
+            ],
+        )?;
+
+        Self::select_correction_rule_by_id(&conn, conn.last_insert_rowid())
+    }
+
+    pub fn get_correction_rules(&self) -> Result<Vec<CorrectionRule>> {
+        let conn = self.get_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, heard_text, correct_text, enabled, source_history_entry_id, created_at, updated_at
+             FROM correction_rules
+             ORDER BY id DESC",
+        )?;
+
+        let rules = stmt
+            .query_map([], Self::map_correction_rule)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)?;
+
+        Ok(rules)
+    }
+
+    pub fn get_enabled_correction_rules(&self) -> Result<Vec<CorrectionRule>> {
+        let conn = self.get_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, heard_text, correct_text, enabled, source_history_entry_id, created_at, updated_at
+             FROM correction_rules
+             WHERE enabled = 1
+             ORDER BY id ASC",
+        )?;
+
+        let rules = stmt
+            .query_map([], Self::map_correction_rule)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)?;
+
+        Ok(rules)
+    }
+
+    pub fn get_correction_vocabulary(&self) -> Result<Vec<String>> {
+        Ok(self
+            .get_enabled_correction_rules()?
+            .into_iter()
+            .map(|rule| rule.correct_text)
+            .collect())
+    }
+
+    pub fn set_correction_rule_enabled(&self, id: i64, enabled: bool) -> Result<CorrectionRule> {
+        let now = Utc::now().timestamp();
+        let conn = self.get_connection()?;
+        let updated = conn.execute(
+            "UPDATE correction_rules
+             SET enabled = ?1, updated_at = ?2
+             WHERE id = ?3",
+            params![enabled, now, id],
+        )?;
+
+        if updated == 0 {
+            return Err(anyhow!("Correction rule {} not found", id));
+        }
+
+        Self::select_correction_rule_by_id(&conn, id)
+    }
+
+    pub fn update_correction_rule(
+        &self,
+        id: i64,
+        heard_text: Option<String>,
+        correct_text: Option<String>,
+        enabled: Option<bool>,
+    ) -> Result<CorrectionRule> {
+        let conn = self.get_connection()?;
+        let existing = Self::select_correction_rule_by_id(&conn, id)?;
+        let heard_text = heard_text
+            .as_deref()
+            .map(Self::normalize_correction_text)
+            .unwrap_or(existing.heard_text);
+        let correct_text = correct_text
+            .as_deref()
+            .map(Self::normalize_correction_text)
+            .unwrap_or(existing.correct_text);
+        let enabled = enabled.unwrap_or(existing.enabled);
+
+        Self::validate_correction_rule_texts(&heard_text, &correct_text)?;
+
+        let heard_text_key = Self::correction_key(&heard_text);
+
+        if Self::has_duplicate_correction_rule_key(&conn, &heard_text_key, Some(id))? {
+            return Err(anyhow!("Duplicate correction rule for '{}'", heard_text));
+        }
+
+        let updated = conn.execute(
+            "UPDATE correction_rules
+             SET heard_text = ?1,
+                 heard_text_key = ?2,
+                 correct_text = ?3,
+                 enabled = ?4,
+                 updated_at = ?5
+             WHERE id = ?6",
+            params![
+                heard_text,
+                heard_text_key,
+                correct_text,
+                enabled,
+                Utc::now().timestamp(),
+                id
+            ],
+        )?;
+
+        if updated == 0 {
+            return Err(anyhow!("Correction rule {} not found", id));
+        }
+
+        Self::select_correction_rule_by_id(&conn, id)
+    }
+
+    pub fn delete_correction_rule(&self, id: i64) -> Result<()> {
+        let conn = self.get_connection()?;
+        let deleted = conn.execute("DELETE FROM correction_rules WHERE id = ?1", params![id])?;
+
+        if deleted == 0 {
+            return Err(anyhow!("Correction rule {} not found", id));
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_enabled_correction_rules(&self, text: &str) -> Result<String> {
+        let rules = self.get_enabled_correction_rules()?;
+        Ok(apply_correction_rules(text, &rules))
     }
 
     /// Save a new history entry to the database.
@@ -667,10 +946,37 @@ mod tests {
                 post_processed_text TEXT,
                 post_process_prompt TEXT,
                 post_process_requested BOOLEAN NOT NULL DEFAULT 0
+            );
+            CREATE TABLE correction_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                heard_text TEXT NOT NULL,
+                heard_text_key TEXT NOT NULL UNIQUE,
+                correct_text TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                source_history_entry_id INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
             );",
         )
         .expect("create transcription_history table");
         conn
+    }
+
+    fn correction_rule(
+        id: i64,
+        heard_text: &str,
+        correct_text: &str,
+        enabled: bool,
+    ) -> CorrectionRule {
+        CorrectionRule {
+            id,
+            heard_text: heard_text.to_string(),
+            correct_text: correct_text.to_string(),
+            enabled,
+            source_history_entry_id: None,
+            created_at: 100,
+            updated_at: 100,
+        }
     }
 
     fn insert_entry(conn: &Connection, timestamp: i64, text: &str, post_processed: Option<&str>) {
@@ -733,5 +1039,80 @@ mod tests {
 
         assert_eq!(entry.timestamp, 100);
         assert_eq!(entry.transcription_text, "completed");
+    }
+
+    #[test]
+    fn apply_correction_rules_replaces_phrase_case_insensitively() {
+        let rules = vec![correction_rule(1, "Live Zap", "Livess App", true)];
+
+        let corrected = apply_correction_rules("Open live zap, then Live Zap again.", &rules);
+
+        assert_eq!(corrected, "Open Livess App, then Livess App again.");
+    }
+
+    #[test]
+    fn apply_correction_rules_respects_word_boundaries() {
+        let rules = vec![correction_rule(1, "zap", "app", true)];
+
+        let corrected = apply_correction_rules("zap zapping zap.", &rules);
+
+        assert_eq!(corrected, "app zapping app.");
+    }
+
+    #[test]
+    fn apply_correction_rules_skips_disabled_rules() {
+        let rules = vec![correction_rule(1, "Live Zap", "Livess App", false)];
+
+        let corrected = apply_correction_rules("Live Zap", &rules);
+
+        assert_eq!(corrected, "Live Zap");
+    }
+
+    #[test]
+    fn correction_rule_validation_rejects_empty_text() {
+        assert!(HistoryManager::validate_correction_rule_texts("", "Livess App").is_err());
+        assert!(HistoryManager::validate_correction_rule_texts("Live Zap", "").is_err());
+    }
+
+    #[test]
+    fn correction_rule_validation_rejects_noop_rule() {
+        assert!(HistoryManager::validate_correction_rule_texts("Live Zap", "live zap").is_err());
+    }
+
+    #[test]
+    fn duplicate_correction_rule_key_is_detected_case_insensitively() {
+        let conn = setup_conn();
+        conn.execute(
+            "INSERT INTO correction_rules (
+                heard_text,
+                heard_text_key,
+                correct_text,
+                enabled,
+                source_history_entry_id,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                "Live Zap",
+                HistoryManager::correction_key("Live Zap"),
+                "Livess App",
+                true,
+                Option::<i64>::None,
+                100,
+                100
+            ],
+        )
+        .expect("insert correction rule");
+
+        let duplicate_key = HistoryManager::correction_key("live   zap");
+
+        assert!(
+            HistoryManager::has_duplicate_correction_rule_key(&conn, &duplicate_key, None)
+                .expect("check duplicate")
+        );
+        assert!(
+            !HistoryManager::has_duplicate_correction_rule_key(&conn, &duplicate_key, Some(1))
+                .expect("check excluded duplicate")
+        );
     }
 }

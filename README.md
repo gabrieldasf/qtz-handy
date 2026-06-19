@@ -6,6 +6,37 @@
 
 Handy is a cross-platform desktop application that provides simple, privacy-focused speech transcription. Press a shortcut, speak, and have your words appear in any text field. This happens on your own computer without sending any information to the cloud.
 
+## Quartzo Internal Fork
+
+This repository is Quartzo's private internal fork of [cjpais/Handy](https://github.com/cjpais/Handy). The fork is maintained for Quartzo use while keeping the original Handy project available as the upstream source of truth.
+
+Repository policy:
+
+- `origin` points to the Quartzo fork: `gabrieldasf/qtz-handy`.
+- `upstream` points to the original project: `cjpais/Handy`.
+- Push Quartzo work to `origin`.
+- Treat `upstream` as fetch-only for review, rebasing, and selective merges from the original project.
+- Keep changes scoped so upstream updates remain auditable and low-risk.
+
+Quartzo-specific changes currently added on top of upstream Handy:
+
+- History now supports correction rules created from individual transcription entries.
+- A user can review a transcript and add rows such as `Live Zap -> Livess App`.
+- Correction rules are stored locally in Handy's SQLite history database.
+- Enabled rules are applied deterministically after transcription so future transcripts use the corrected spelling.
+- Correction vocabulary is also passed into the Whisper prompt as contextual hints, improving the chance that recurring terms are heard correctly before post-processing.
+- Post-processing receives the same correction context, keeping local replacement rules and LLM cleanup aligned.
+
+Operational notes:
+
+- Local Windows installer builds should target NSIS and skip signing unless a Quartzo signing flow is available:
+
+  ```powershell
+  bunx tauri build -b nsis --no-sign --ci
+  ```
+
+- For Windows builds involving Whisper Vulkan, use a short Cargo target directory such as `C:\t\qh` to avoid MSBuild/FileTracker failures caused by very long generated paths.
+
 ## Why Handy?
 
 Handy was created to fill the gap for a truly open source, extensible speech-to-text tool. As stated on [handy.computer](https://handy.computer):

@@ -431,7 +431,20 @@
       "retranscribe": "Re-transcrever",
       "retranscribeError": "Falha ao re-transcrever. Por favor, tente novamente.",
       "transcribing": "Transcrevendo...",
-      "transcriptionFailed": "A transcrição falhou. Você pode re-transcrever usando o ícone de tentar novamente."
+      "transcriptionFailed": "A transcrição falhou. Você pode re-transcrever usando o ícone de tentar novamente.",
+      "corrections": {
+        "add": "Add correction",
+        "heardLabel": "Wrong or heard text",
+        "heardPlaceholder": "Wrong or heard text",
+        "correctLabel": "Correct text",
+        "correctPlaceholder": "Correct text",
+        "cancel": "Cancel correction row",
+        "saved": "Correction saved",
+        "created": "Correction saved",
+        "partialRow": "Enter both the heard text and the correct text.",
+        "duplicate": "A correction for \"{{heardText}}\" already exists.",
+        "createError": "Failed to save correction. Please try again."
+      }
     },
     "debug": {
       "title": "Depuração",

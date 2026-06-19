@@ -785,6 +785,54 @@ async retryHistoryEntryTranscription(id: number) : Promise<Result<null, string>>
     else return { status: "error", error: e  as any };
 }
 },
+async getCorrectionRules() : Promise<Result<CorrectionRule[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_correction_rules") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async createCorrectionRule(heardText: string, correctText: string, historyEntryId: number | null) : Promise<Result<CorrectionRule, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_correction_rule", { heardText, correctText, historyEntryId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async updateCorrectionRule(id: number, heardText: string | null, correctText: string | null, enabled: boolean | null) : Promise<Result<CorrectionRule, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_correction_rule", { id, heardText, correctText, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setCorrectionRuleEnabled(id: number, enabled: boolean) : Promise<Result<CorrectionRule, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_correction_rule_enabled", { id, enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteCorrectionRule(id: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_correction_rule", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async applyCorrectionRules(text: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("apply_correction_rules", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async updateHistoryLimit(limit: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("update_history_limit", { limit }) };
@@ -841,6 +889,7 @@ export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
 export type CustomSounds = { start: boolean; stop: boolean }
 export type EngineType = "Whisper" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
 export type GpuDeviceOption = { id: number; name: string; total_vram_mb: number }
+export type CorrectionRule = { id: number; heard_text: string; correct_text: string; enabled: boolean; source_history_entry_id: number | null; created_at: number; updated_at: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**

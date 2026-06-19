@@ -431,7 +431,20 @@
       "retranscribe": "Ri-trascrivere",
       "retranscribeError": "Impossibile ri-trascrivere. Riprova.",
       "transcribing": "Trascrizione in corso...",
-      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione."
+      "transcriptionFailed": "Trascrizione fallita. Puoi ri-trascrivere usando l'icona di ripetizione.",
+      "corrections": {
+        "add": "Add correction",
+        "heardLabel": "Wrong or heard text",
+        "heardPlaceholder": "Wrong or heard text",
+        "correctLabel": "Correct text",
+        "correctPlaceholder": "Correct text",
+        "cancel": "Cancel correction row",
+        "saved": "Correction saved",
+        "created": "Correction saved",
+        "partialRow": "Enter both the heard text and the correct text.",
+        "duplicate": "A correction for \"{{heardText}}\" already exists.",
+        "createError": "Failed to save correction. Please try again."
+      }
     },
     "debug": {
       "title": "Debug",

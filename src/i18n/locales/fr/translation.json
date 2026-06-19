@@ -431,7 +431,20 @@
       "retranscribe": "Re-transcrire",
       "retranscribeError": "Impossible de re-transcrire. Veuillez réessayer.",
       "transcribing": "Transcription en cours...",
-      "transcriptionFailed": "La transcription a échoué. Vous pouvez re-transcrire en utilisant l'icône de réessai."
+      "transcriptionFailed": "La transcription a échoué. Vous pouvez re-transcrire en utilisant l'icône de réessai.",
+      "corrections": {
+        "add": "Add correction",
+        "heardLabel": "Wrong or heard text",
+        "heardPlaceholder": "Wrong or heard text",
+        "correctLabel": "Correct text",
+        "correctPlaceholder": "Correct text",
+        "cancel": "Cancel correction row",
+        "saved": "Correction saved",
+        "created": "Correction saved",
+        "partialRow": "Enter both the heard text and the correct text.",
+        "duplicate": "A correction for \"{{heardText}}\" already exists.",
+        "createError": "Failed to save correction. Please try again."
+      }
     },
     "debug": {
       "title": "Débogage",

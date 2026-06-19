@@ -1,7 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { Check, Copy, FolderOpen, RotateCcw, Star, Trash2 } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  FolderOpen,
+  Plus,
+  RotateCcw,
+  Star,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -14,6 +24,7 @@ import { useOsType } from "@/hooks/useOsType";
 import { formatDateTime } from "@/utils/dateFormat";
 import { AudioPlayer } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Input";
 
 const IconButton: React.FC<{
   onClick: () => void;
@@ -37,6 +48,47 @@ const IconButton: React.FC<{
 );
 
 const PAGE_SIZE = 30;
+const CORRECTION_ADVANCE_KEYS = new Set(["Tab", "Enter", "ArrowRight"]);
+
+const shouldAdvanceCorrectionField = (
+  event: React.KeyboardEvent<HTMLInputElement>,
+) => CORRECTION_ADVANCE_KEYS.has(event.key) && !event.shiftKey;
+
+interface CorrectionDraft {
+  id: string;
+  heardText: string;
+  correctText: string;
+  status: "editing" | "saving" | "saved";
+}
+
+const createEmptyCorrectionDraft = (): CorrectionDraft => ({
+  id:
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`,
+  heardText: "",
+  correctText: "",
+  status: "editing",
+});
+
+const normalizeCorrectionText = (value: string) =>
+  value.trim().replace(/\s+/g, " ").toLowerCase();
+
+const createCorrectionRule = async (
+  heardText: string,
+  correctText: string,
+  historyEntryId: number,
+) => {
+  const result = await commands.createCorrectionRule(
+    heardText,
+    correctText,
+    historyEntryId,
+  );
+
+  if (result.status === "error") {
+    throw new Error(result.error);
+  }
+};
 
 interface OpenRecordingsButtonProps {
   onClick: () => void;
@@ -58,6 +110,275 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
     <span>{label}</span>
   </Button>
 );
+
+interface CorrectionRowEditorProps {
+  entryId: number;
+  disabled: boolean;
+}
+
+const CorrectionRowEditor: React.FC<CorrectionRowEditorProps> = ({
+  entryId,
+  disabled,
+}) => {
+  const { t } = useTranslation();
+  const [drafts, setDrafts] = useState<CorrectionDraft[]>([]);
+  const heardInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const correctInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const pendingFocusRef = useRef<{
+    draftId: string;
+    field: "heard" | "correct";
+  } | null>(null);
+
+  useEffect(() => {
+    const pendingFocus = pendingFocusRef.current;
+    if (!pendingFocus) return;
+
+    const refMap =
+      pendingFocus.field === "heard" ? heardInputRefs : correctInputRefs;
+    const input = refMap.current[pendingFocus.draftId];
+    if (input) {
+      input.focus();
+      pendingFocusRef.current = null;
+    }
+  }, [drafts]);
+
+  const setDraftValue = (
+    draftId: string,
+    field: "heardText" | "correctText",
+    value: string,
+  ) => {
+    setDrafts((currentDrafts) =>
+      currentDrafts.map((draft) =>
+        draft.id === draftId ? { ...draft, [field]: value } : draft,
+      ),
+    );
+  };
+
+  const hasDuplicateDraft = (draftToCheck: CorrectionDraft) => {
+    const normalizedHeard = normalizeCorrectionText(draftToCheck.heardText);
+
+    return drafts.some(
+      (draft) =>
+        draft.id !== draftToCheck.id &&
+        draft.status === "saved" &&
+        normalizeCorrectionText(draft.heardText) === normalizedHeard,
+    );
+  };
+
+  const addCorrectionRow = () => {
+    const existingActiveDraft = drafts.find(
+      (draft) => draft.status !== "saved",
+    );
+
+    if (existingActiveDraft) {
+      pendingFocusRef.current = {
+        draftId: existingActiveDraft.id,
+        field: "heard",
+      };
+      heardInputRefs.current[existingActiveDraft.id]?.focus();
+      return;
+    }
+
+    const draft = createEmptyCorrectionDraft();
+    pendingFocusRef.current = { draftId: draft.id, field: "heard" };
+    setDrafts((currentDrafts) => [...currentDrafts, draft]);
+  };
+
+  const cancelDraft = (draftId: string) => {
+    setDrafts((currentDrafts) =>
+      currentDrafts.filter((draft) => draft.id !== draftId),
+    );
+  };
+
+  const commitDraft = async (draft: CorrectionDraft) => {
+    const heardText = draft.heardText.trim();
+    const correctText = draft.correctText.trim();
+
+    if (!heardText || !correctText) {
+      toast.error(t("settings.history.corrections.partialRow"));
+      return;
+    }
+
+    if (hasDuplicateDraft(draft)) {
+      toast.error(
+        t("settings.history.corrections.duplicate", {
+          heardText,
+        }),
+      );
+      return;
+    }
+
+    if (draft.status !== "editing") {
+      return;
+    }
+
+    setDrafts((currentDrafts) =>
+      currentDrafts.map((currentDraft) =>
+        currentDraft.id === draft.id
+          ? { ...currentDraft, heardText, correctText, status: "saving" }
+          : currentDraft,
+      ),
+    );
+
+    try {
+      await createCorrectionRule(heardText, correctText, entryId);
+      const nextDraft = createEmptyCorrectionDraft();
+      pendingFocusRef.current = { draftId: nextDraft.id, field: "heard" };
+      setDrafts((currentDrafts) => [
+        ...currentDrafts.map((currentDraft) =>
+          currentDraft.id === draft.id
+            ? {
+                ...currentDraft,
+                heardText,
+                correctText,
+                status: "saved" as const,
+              }
+            : currentDraft,
+        ),
+        nextDraft,
+      ]);
+      toast.success(t("settings.history.corrections.created"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("Failed to create correction rule:", error);
+      setDrafts((currentDrafts) =>
+        currentDrafts.map((currentDraft) =>
+          currentDraft.id === draft.id
+            ? { ...currentDraft, status: "editing" }
+            : currentDraft,
+        ),
+      );
+      toast.error(
+        message.toLocaleLowerCase().includes("duplicate") ||
+          message.toLocaleLowerCase().includes("already")
+          ? t("settings.history.corrections.duplicate", {
+              heardText,
+            })
+          : t("settings.history.corrections.createError"),
+      );
+    }
+  };
+
+  const handleHeardKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+    draft: CorrectionDraft,
+  ) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDraft(draft.id);
+      return;
+    }
+
+    if (!shouldAdvanceCorrectionField(event)) return;
+    if (!draft.heardText.trim()) return;
+
+    event.preventDefault();
+    correctInputRefs.current[draft.id]?.focus();
+  };
+
+  const handleCorrectKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+    draft: CorrectionDraft,
+  ) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDraft(draft.id);
+      return;
+    }
+
+    if (!shouldAdvanceCorrectionField(event)) return;
+
+    event.preventDefault();
+    void commitDraft(draft);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Button
+        type="button"
+        onClick={addCorrectionRow}
+        disabled={disabled}
+        variant="secondary"
+        size="sm"
+        className="inline-flex items-center gap-1.5"
+        title={t("settings.history.corrections.add")}
+      >
+        <Plus className="w-3.5 h-3.5" />
+        <span>{t("settings.history.corrections.add")}</span>
+      </Button>
+
+      {drafts.length > 0 && (
+        <div className="space-y-1.5">
+          {drafts.map((draft) => {
+            const isSaved = draft.status === "saved";
+            const isSaving = draft.status === "saving";
+            return (
+              <div
+                key={draft.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]"
+              >
+                <Input
+                  ref={(element) => {
+                    heardInputRefs.current[draft.id] = element;
+                  }}
+                  type="text"
+                  value={draft.heardText}
+                  onChange={(event) =>
+                    setDraftValue(draft.id, "heardText", event.target.value)
+                  }
+                  onKeyDown={(event) => handleHeardKeyDown(event, draft)}
+                  placeholder={t(
+                    "settings.history.corrections.heardPlaceholder",
+                  )}
+                  aria-label={t("settings.history.corrections.heardLabel")}
+                  variant="compact"
+                  disabled={disabled || isSaved || isSaving}
+                  className="w-full min-w-0"
+                />
+                <ArrowRight
+                  className="w-3.5 h-3.5 text-text/40"
+                  aria-hidden="true"
+                />
+                <Input
+                  ref={(element) => {
+                    correctInputRefs.current[draft.id] = element;
+                  }}
+                  type="text"
+                  value={draft.correctText}
+                  onChange={(event) =>
+                    setDraftValue(draft.id, "correctText", event.target.value)
+                  }
+                  onKeyDown={(event) => handleCorrectKeyDown(event, draft)}
+                  placeholder={t(
+                    "settings.history.corrections.correctPlaceholder",
+                  )}
+                  aria-label={t("settings.history.corrections.correctLabel")}
+                  variant="compact"
+                  disabled={disabled || isSaved || isSaving}
+                  className="w-full min-w-0 col-start-1 sm:col-start-auto"
+                />
+                {isSaved ? (
+                  <Check
+                    className="w-4 h-4 text-logo-primary"
+                    aria-label={t("settings.history.corrections.saved")}
+                  />
+                ) : (
+                  <IconButton
+                    onClick={() => cancelDraft(draft.id)}
+                    disabled={disabled || isSaving}
+                    title={t("settings.history.corrections.cancel")}
+                  >
+                    <X width={16} height={16} />
+                  </IconButton>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const HistorySettings: React.FC = () => {
   const { t } = useTranslation();
@@ -438,6 +759,8 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             ? entry.transcription_text
             : t("settings.history.transcriptionFailed")}
       </p>
+
+      <CorrectionRowEditor entryId={entry.id} disabled={retrying} />
 
       <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
     </div>

@@ -431,7 +431,20 @@
       "retranscribe": "Transkrybuj ponownie",
       "retranscribeError": "Nie udało się ponownie transkrybować. Spróbuj ponownie.",
       "transcribing": "Transkrybuję...",
-      "transcriptionFailed": "Transkrypcja nie powiodła się. Możesz transkrybować ponownie za pomocą ikony ponowienia."
+      "transcriptionFailed": "Transkrypcja nie powiodła się. Możesz transkrybować ponownie za pomocą ikony ponowienia.",
+      "corrections": {
+        "add": "Add correction",
+        "heardLabel": "Wrong or heard text",
+        "heardPlaceholder": "Wrong or heard text",
+        "correctLabel": "Correct text",
+        "correctPlaceholder": "Correct text",
+        "cancel": "Cancel correction row",
+        "saved": "Correction saved",
+        "created": "Correction saved",
+        "partialRow": "Enter both the heard text and the correct text.",
+        "duplicate": "A correction for \"{{heardText}}\" already exists.",
+        "createError": "Failed to save correction. Please try again."
+      }
     },
     "debug": {
       "title": "Debugowanie",

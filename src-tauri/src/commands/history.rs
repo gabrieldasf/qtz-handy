@@ -1,6 +1,6 @@
 use crate::actions::process_transcription_output;
 use crate::managers::{
-    history::{HistoryManager, PaginatedHistory},
+    history::{CorrectionRule, HistoryManager, PaginatedHistory},
     transcription::TranscriptionManager,
 };
 use std::sync::Arc;
@@ -103,6 +103,83 @@ pub async fn retry_history_entry_transcription(
             processed.post_process_prompt,
         )
         .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_correction_rules(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+) -> Result<Vec<CorrectionRule>, String> {
+    history_manager
+        .get_correction_rules()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn create_correction_rule(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    heard_text: String,
+    correct_text: String,
+    history_entry_id: Option<i64>,
+) -> Result<CorrectionRule, String> {
+    history_manager
+        .create_correction_rule(heard_text, correct_text, history_entry_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_correction_rule(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    id: i64,
+    heard_text: Option<String>,
+    correct_text: Option<String>,
+    enabled: Option<bool>,
+) -> Result<CorrectionRule, String> {
+    history_manager
+        .update_correction_rule(id, heard_text, correct_text, enabled)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_correction_rule_enabled(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    id: i64,
+    enabled: bool,
+) -> Result<CorrectionRule, String> {
+    history_manager
+        .set_correction_rule_enabled(id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_correction_rule(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    id: i64,
+) -> Result<(), String> {
+    history_manager
+        .delete_correction_rule(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn apply_correction_rules(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    text: String,
+) -> Result<String, String> {
+    history_manager
+        .apply_enabled_correction_rules(&text)
         .map_err(|e| e.to_string())
 }
 
