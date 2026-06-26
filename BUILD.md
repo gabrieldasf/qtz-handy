@@ -143,3 +143,46 @@ bun run tauri build -- --bundles deb
 ```
 
 Then install using the deb extraction method above.
+
+## Windows (QTZ / this machine)
+
+This checkout (qtz-handy) has extra native dependencies (whisper via bindgen + ort + cpal).
+
+### One-command build + open installer (recommended)
+
+1. Open **PowerShell as Administrator**.
+2. Run:
+
+```powershell
+cd D:\Apps\QTZ-Apps\qtz-handy
+.\build-installer.ps1
+```
+
+The script will:
+- Install LLVM (for libclang) via winget/choco if missing
+- Configure MSVC environment (vcvars64)
+- Run the full `bun run tauri build`
+- Automatically locate the .msi (or .exe) and open it
+
+### Manual steps (if the script needs tweaks)
+
+```powershell
+# As Administrator
+choco install llvm -y
+
+$env:LIBCLANG_PATH = "C:\ProgramData\chocolatey\lib\llvm\tools\LLVM\bin"
+cd D:\Apps\QTZ-Apps\qtz-handy
+
+# Ensure MSVC vars + build
+cmd /c "call `"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat`" >nul && bun run tauri build"
+
+# Open the installer
+$msi = Get-ChildItem "src-tauri\target\release\bundle\msi\Handy_*.msi" | Select -First 1
+Invoke-Item $msi.FullName
+```
+
+The resulting installer is normally at:
+`src-tauri/target/release/bundle/msi/Handy_0.8.3_x64_en-US.msi`
+
+(Also generates an NSIS .exe in the same tree.)
+
